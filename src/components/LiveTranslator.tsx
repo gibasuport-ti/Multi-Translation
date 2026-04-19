@@ -385,27 +385,32 @@ export default function LiveTranslator() {
   };
 
   const translateSelection = async (text: string) => {
+    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      setErrorMsg("API Key não encontrada.");
+      return;
+    }
+    
     setSelectionMenu(null);
     setIsSendingPrompt(true);
     addTranscription(`Traduzindo seleção: "${text.substring(0, 30)}${text.length > 30 ? '...' : ''}"`, false);
 
     try {
-      const response = await fetch("/api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, targetLanguage })
+      const gAI = new GoogleGenAI({ apiKey });
+      const response = await gAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{ role: "user", parts: [{ text: `Traduza o seguinte texto para ${targetLanguage}: "${text}"` }] }],
+        config: {
+          systemInstruction: "Você é um tradutor expert. Retorne apenas a tradução direta, sem comentários extras.",
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }
+        }
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Erro ${response.status}`);
-      }
-      
-      const data = await response.json();
-      addTranscription(data.translation || "Erro na tradução.", true);
+      const translation = response.text || "Erro na tradução.";
+      addTranscription(translation, true);
     } catch (err: any) {
-      console.error("Translation error:", err);
-      addTranscription(`Erro ao traduzir: ${err.message}`, true);
+      const errorDetail = err.message || "Erro desconhecido";
+      addTranscription(`Erro ao traduzir seleção: ${errorDetail}`, true);
     } finally {
       setIsSendingPrompt(false);
     }
@@ -471,29 +476,10 @@ export default function LiveTranslator() {
     setNeedsApiKey(false);
     setSessionStatus("connecting");
 
-    // Buscamos se existe uma chave no servidor (seguro) ou se o usuário configurou via VITE_ no cliente
-    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || (import.meta as any).env.VITE_GEMINI_API_KEY;
+    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
     
-    // Verificamos o status do servidor primeiro
-    try {
-      const statusRes = await fetch("/api/status");
-      const statusData = await statusRes.json();
-      
-      if (!statusData.hasApiKey && !apiKey) {
-        setErrorMsg("Chave de API não configurada no servidor nem no cliente (.env).");
-        setNeedsApiKey(true);
-        setIsInitializing(false);
-        setSessionStatus("error");
-        return;
-      }
-    } catch (e) {
-      console.warn("Could not reach server status API, falling back to client vars.");
-    }
-
-    if (!apiKey) {
-      // Se não houver chave no cliente para o modo Live, avisamos que este modo requer chave direta
-      // (Devido à natureza de baixa latência do WebSocket do Google GenAI SDK)
-      setErrorMsg("A API Live (Voz) requer que a GEMINI_API_KEY esteja presente nas variáveis de ambiente do cliente (VITE_GEMINI_API_KEY) para funcionar com baixa latência.");
+    if (!apiKey || apiKey === "SUA_CHAVE_AQUI") {
+      setErrorMsg("Chave de API não configurada no cliente (.env) nem no ambiente do AI Studio. Clique no botão abaixo para configurar.");
       setNeedsApiKey(true);
       setIsInitializing(false);
       setSessionStatus("error");
@@ -532,25 +518,17 @@ export default function LiveTranslator() {
         return;
       }
 
-      // Para voz ao vivo, tentamos usar o Proxy do servidor se possível
-      // Como o SDK gAI.live.connect gerencia sua própria URL, 
-      // precisaremos passar uma chave "dummy" se o proxy for usado lá.
-      const gAI = new GoogleGenAI({ apiKey: apiKey || "PROXY_MANAGED" });
+      const gAI = new GoogleGenAI({ apiKey });
 
       // Mapeamento dinâmico de vozes Gemini Live
       const liveVoices: Record<string, string[]> = {
-        female: ["Aoede", "Kore", "Aoede", "Puck"],
+        female: ["Aoede", "Kore", "Aoede", "Puck"], // Aoede é a mais próxima de locução
         male: ["Charon", "Fenrir", "Puck", "Charon"]
       };
       const selectedLiveVoice = liveVoices[voiceSettings.gender][voiceSettings.voiceIndex] || (voiceSettings.gender === 'female' ? "Aoede" : "Charon");
 
-      // Tenta conectar usando o Proxy de WebSocket do nosso servidor
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const proxyUrl = `${protocol}//${window.location.host}/api/live`;
-
-      const sessionPromise = (gAI as any).live.connect({
-        url: proxyUrl, // Força o uso do proxy
-        model: "gemini-3-flash-preview",
+      const sessionPromise = gAI.live.connect({
+        model: "gemini-3.1-flash-live-preview",
         callbacks: {
           onopen: () => {
           setIsInitializing(false);
@@ -703,35 +681,48 @@ export default function LiveTranslator() {
 
   const handlePromptSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!promptValue.trim() || isSendingPrompt) return;
+    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!promptValue.trim() || isSendingPrompt || !apiKey || apiKey === "SUA_CHAVE_AQUI") {
+      if (!apiKey || apiKey === "SUA_CHAVE_AQUI") setErrorMsg("API Key do Gemini não encontrada ou não configurada.");
+      return;
+    }
 
     setIsSendingPrompt(true);
     const userText = promptValue;
     setPromptValue("");
     addTranscription(userText, false);
 
+    // Contexto: Pegamos as últimas mensagens para o Gemini lembrar do que estamos falando
     const history = transcriptions.slice(-12).map(t => ({
       role: t.isModel ? "model" : "user",
       parts: [{ text: t.text }]
     }));
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: userText, history, targetLanguage })
+      const gAI = new GoogleGenAI({ apiKey });
+      const response = await gAI.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [
+          ...history,
+          { role: "user", parts: [{ text: userText }] }
+        ],
+        config: {
+          systemInstruction: `Você é um assistente poliglota inteligente que alterna entre tradutor e chat geral.
+            CONTEXTO ATUAL: O usuário quer traduções para ${targetLanguage}.
+            OBJETIVO:
+            - Se o input for texto para traduzir: forneça apenas a tradução impecável.
+            - Se o input for uma pergunta ou conversa: saia do modo tradutor e responda como um assistente (ChatGPT).
+            - Mantenha o histórico (contexto). Se ele perguntar algo e depois voltar a traduzir, lembre-se do que foi dito.`,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL }
+        }
       });
       
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || `Erro ${response.status}`);
-      }
-
-      const data = await response.json();
-      addTranscription(data.translation || "Sem resposta do assistente.", true);
+      const translation = response.text || "Sem resposta do assistente.";
+      addTranscription(translation, true);
     } catch (err: any) {
       console.error("Prompt error:", err);
-      addTranscription(`Erro ao conectar com o Gemini: ${err.message}`, true);
+      const errorDetail = err.message || "Erro desconhecido";
+      addTranscription(`Erro ao conectar com o Gemini: ${errorDetail}`, true);
     } finally {
       setIsSendingPrompt(false);
     }
