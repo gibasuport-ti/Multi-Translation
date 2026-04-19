@@ -476,7 +476,7 @@ export default function LiveTranslator() {
     setNeedsApiKey(false);
     setSessionStatus("connecting");
 
-    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || process.env.GEMINI_API_KEY || localStorage.getItem("GEMINI_API_KEY");
     
     if (!apiKey || apiKey === "SUA_CHAVE_AQUI") {
       setErrorMsg("Chave de API não configurada no cliente (.env) nem no ambiente do AI Studio. Clique no botão abaixo para configurar.");
@@ -676,12 +676,23 @@ export default function LiveTranslator() {
     if ((window as any).aistudio?.openSelectKey) {
       await (window as any).aistudio.openSelectKey();
       startSession();
+    } else {
+      // Fallback para GitHub Pages ou Local
+      const userKey = prompt("Insira sua Gemini API Key (pegue em: aistudio.google.com/app/apikey):");
+      if (userKey && userKey.trim().length > 20) {
+        localStorage.setItem("GEMINI_API_KEY", userKey.trim());
+        setErrorMsg(null);
+        setNeedsApiKey(false);
+        startSession();
+      } else if (userKey) {
+        alert("Chave de API inválida ou muito curta.");
+      }
     }
   };
 
   const handlePromptSubmit = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = (window as any).process?.env?.GEMINI_API_KEY || process.env.GEMINI_API_KEY || localStorage.getItem("GEMINI_API_KEY");
     if (!promptValue.trim() || isSendingPrompt || !apiKey || apiKey === "SUA_CHAVE_AQUI") {
       if (!apiKey || apiKey === "SUA_CHAVE_AQUI") setErrorMsg("API Key do Gemini não encontrada ou não configurada.");
       return;
