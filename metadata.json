@@ -1,0 +1,6 @@
+{
+  "name": "Multi-Translation",
+  "description": "Tradução simultânea profissional usando Gemini Live API. Multi-idiomas com tradução instantânea de voz e texto.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["live_api"]
+}
